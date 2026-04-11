@@ -234,6 +234,47 @@
     <div class="login-hint">
       Demo — Admin: <strong>admin</strong> / <strong>admin123</strong>&nbsp;&nbsp;|&nbsp;&nbsp;Client: <strong>CLT-001</strong> / <strong>pass123</strong>
     </div>
+    <div style="text-align:center;margin-top:18px;padding-top:14px;border-top:1px solid var(--border)">
+      <button onclick="openEmergencyReset()" style="background:none;border:none;font-size:12px;color:var(--text-muted);cursor:pointer;font-family:var(--font-body);text-decoration:underline;text-underline-offset:3px;">Forgot admin password?</button>
+    </div>
+  </div>
+</div>
+
+<!-- Emergency Reset Modal -->
+<div class="modal-bg" id="mEmergency">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header" style="background:var(--navy);border-radius:16px 16px 0 0">
+      <h3 style="color:white;display:flex;align-items:center;gap:8px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        Emergency Admin Reset
+      </h3>
+      <button class="modal-close" style="color:white" onclick="closeModal('mEmergency')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div style="background:var(--gold-light);border:1px solid var(--gold);border-radius:var(--radius-sm);padding:12px 14px;font-size:13px;color:var(--gold-dark);margin-bottom:18px;">
+        <strong>Use only if you have forgotten your admin password.</strong><br>
+        Enter the master PIN to reset your credentials.
+      </div>
+      <div class="fg">
+        <label>Master PIN</label>
+        <input type="password" id="masterPin" placeholder="Enter master PIN" onkeydown="if(event.key==='Enter')verifyMasterPin()" />
+      </div>
+      <div class="err-msg" id="pinError"></div>
+      <div id="resetFormArea" style="display:none">
+        <div style="background:var(--success-light);border-left:3px solid var(--green-dark);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;color:var(--green-dark);margin-bottom:16px">
+          ✓ PIN verified. Set your new credentials below.
+        </div>
+        <div class="fg"><label>New Username</label><input type="text" id="reset_user" placeholder="New admin username" /></div>
+        <div class="fg"><label>New Password</label><input type="password" id="reset_pass" placeholder="New password (min 6 chars)" /></div>
+        <div class="fg"><label>Confirm Password</label><input type="password" id="reset_conf" placeholder="Repeat new password" /></div>
+        <div class="err-msg" id="resetError"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('mEmergency')">Cancel</button>
+      <button class="btn btn-navy" id="pinBtn" onclick="verifyMasterPin()">Verify PIN</button>
+      <button class="btn btn-green" id="resetBtn" style="display:none" onclick="doEmergencyReset()">Reset Credentials</button>
+    </div>
   </div>
 </div>
 
@@ -1247,6 +1288,58 @@ function renderClient(){
 function filterTbl(input,id){
   const q=input.value.toLowerCase();
   document.querySelectorAll(`#${id} tbody tr`).forEach(r=>r.style.display=r.textContent.toLowerCase().includes(q)?'':'none');
+}
+
+// ================================================================
+//  EMERGENCY RESET
+// ================================================================
+const MASTER_PIN = 'EMMANUEL2025';
+
+function openEmergencyReset(){
+  document.getElementById('masterPin').value='';
+  document.getElementById('pinError').style.display='none';
+  document.getElementById('resetFormArea').style.display='none';
+  document.getElementById('resetError').style.display='none';
+  document.getElementById('pinBtn').style.display='';
+  document.getElementById('resetBtn').style.display='none';
+  ['reset_user','reset_pass','reset_conf'].forEach(id=>document.getElementById(id).value='');
+  openModal('mEmergency');
+  setTimeout(()=>document.getElementById('masterPin').focus(), 200);
+}
+
+function verifyMasterPin(){
+  const pin = document.getElementById('masterPin').value.trim();
+  const errEl = document.getElementById('pinError');
+  errEl.style.display='none';
+  if(!pin){ errEl.textContent='Please enter the master PIN.'; errEl.style.display='block'; return; }
+  if(pin !== MASTER_PIN){ errEl.textContent='Incorrect PIN. Please try again.'; errEl.style.display='block'; document.getElementById('masterPin').value=''; return; }
+  document.getElementById('masterPin').disabled = true;
+  document.getElementById('pinBtn').style.display = 'none';
+  document.getElementById('resetBtn').style.display = '';
+  document.getElementById('resetFormArea').style.display = 'block';
+  setTimeout(()=>document.getElementById('reset_user').focus(), 100);
+}
+
+function doEmergencyReset(){
+  const newUser = document.getElementById('reset_user').value.trim();
+  const newPass = document.getElementById('reset_pass').value;
+  const confPass = document.getElementById('reset_conf').value;
+  const errEl = document.getElementById('resetError');
+  errEl.style.display='none';
+  if(!newUser||!newPass||!confPass){ errEl.textContent='All fields are required.'; errEl.style.display='block'; return; }
+  if(newUser.length < 3){ errEl.textContent='Username must be at least 3 characters.'; errEl.style.display='block'; return; }
+  if(newPass.length < 6){ errEl.textContent='Password must be at least 6 characters.'; errEl.style.display='block'; return; }
+  if(newPass !== confPass){ errEl.textContent='Passwords do not match.'; errEl.style.display='block'; return; }
+  db.admin.username = newUser;
+  db.admin.password = newPass;
+  closeModal('mEmergency');
+  document.getElementById('masterPin').disabled = false;
+  const hint = document.querySelector('.login-hint');
+  const orig = hint.innerHTML;
+  hint.innerHTML = '<span style="color:var(--green-dark);font-weight:600">\u2713 Credentials reset! You can now log in with your new details.</span>';
+  setTimeout(()=>{ hint.innerHTML = orig; }, 5000);
+  document.getElementById('adminUser').value = newUser;
+  switchTab('admin');
 }
 </script>
 </body>
