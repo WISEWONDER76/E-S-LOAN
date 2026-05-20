@@ -353,8 +353,8 @@
     <div class="modal-body">
       <div class="fg"><label>Client *</label><select id="ml_client"></select></div>
       <div class="form-row">
-        <div class="fg"><label>Principal (GHS) *</label><input type="number" id="ml_principal" placeholder="1,000 – 15,000" min="1000" max="15000" oninput="loanPreview()" /></div>
-        <div class="fg"><label>Tenure (months, max 5) *</label><input type="number" id="ml_tenure" placeholder="1–5" min="1" max="5" oninput="loanPreview()" /></div>
+        <div class="fg"><label>Principal (GHS) *</label><input type="number" id="ml_principal" placeholder="Enter any amount" min="1" oninput="loanPreview()" /></div>
+        <div class="fg"><label>Tenure (months) *</label><input type="number" id="ml_tenure" placeholder="Enter number of months" min="1" oninput="loanPreview()" /></div>
       </div>
       <div class="form-row">
         <div class="fg"><label>Start Date *</label><input type="date" id="ml_start" /></div>
@@ -391,7 +391,7 @@
       </div>
       <div class="form-row">
         <div class="fg"><label>MoMo Reference</label><input id="mr_ref" placeholder="Transaction ID" /></div>
-        <div class="fg"><label>Month Label</label><select id="mr_month"><option>Month 1</option><option>Month 2</option><option>Month 3</option><option>Month 4</option><option>Month 5</option></select></div>
+        <div class="fg"><label>Month Label</label><select id="mr_month"></select></div>
       </div>
     </div>
     <div class="modal-footer">
@@ -657,11 +657,13 @@ window.goTo = goTo;
 //  DASHBOARD
 // ================================================================
 function renderDashboard(c) {
-  const disbursed   = cache.loans.reduce((s,l) => s + l.principal, 0);
-  const collected   = cache.repayments.reduce((s,r) => s + r.amount, 0);
-  const fees        = cache.loans.reduce((s,l) => s + l.principal * 0.04, 0);
-  const outstanding = cache.loans.reduce((s,l) => s + getBalance(l).balance, 0);
-  const active      = cache.loans.filter(l => l.status === 'active').length;
+  const disbursed      = cache.loans.reduce((s,l) => s + l.principal, 0);
+  const collected      = cache.repayments.reduce((s,r) => s + r.amount, 0);
+  const fees           = cache.loans.reduce((s,l) => s + l.principal * 0.04, 0);
+  const outstanding    = cache.loans.reduce((s,l) => s + getBalance(l).balance, 0);
+  const active         = cache.loans.filter(l => l.status === 'active').length;
+  // Total estimated interest = 10% × principal × tenure for every loan
+  const totalEstInterest = cache.loans.reduce((s,l) => s + (l.principal * 0.10 * l.tenure), 0);
 
   const recent = [...cache.repayments].sort((a,b) => new Date(b.date) - new Date(a.date)).slice(0, 8);
   const rows = recent.map(r => {
@@ -686,6 +688,7 @@ function renderDashboard(c) {
       <div class="stat-card gold"><div class="stat-label">Total Collected</div><div class="stat-value">${fmt(collected)}</div><div class="stat-sub">${cache.repayments.length} payments</div></div>
       <div class="stat-card danger"><div class="stat-label">Outstanding</div><div class="stat-value">${fmt(outstanding)}</div><div class="stat-sub">${active} active loans</div></div>
       <div class="stat-card navy"><div class="stat-label">Fees Earned</div><div class="stat-value">${fmt(fees)}</div><div class="stat-sub">4% processing fees</div></div>
+      <div class="stat-card" style="border-top:3px solid var(--green-mid)"><div class="stat-label">Est. Total Interest</div><div class="stat-value" style="color:var(--green-dark)">${fmt(totalEstInterest)}</div><div class="stat-sub">10%/mo × tenure, all loans</div></div>
       <div class="stat-card"><div class="stat-label">Total Clients</div><div class="stat-value">${cache.clients.length}</div><div class="stat-sub">${cache.clients.filter(c => c.status === 'active').length} active</div></div>
       <div class="stat-card"><div class="stat-label">Active Loans</div><div class="stat-value">${active}</div><div class="stat-sub">of ${cache.loans.length} total</div></div>
     </div>
@@ -904,8 +907,8 @@ async function saveLoan() {
   const notes = document.getElementById('ml_notes').value;
 
   if (!cid || !p || !t || !sd) { alert('Fill in all required fields.'); return; }
-  if (p < 1000 || p > 15000)   { alert('Principal must be GHS 1,000 – 15,000.'); return; }
-  if (t < 1 || t > 5)          { alert('Tenure must be 1–5 months.'); return; }
+  if (!p || p < 1)              { alert('Please enter a valid principal amount.'); return; }
+  if (!t || t < 1)              { alert('Tenure must be at least 1 month.'); return; }
 
   showLoading('Creating loan...');
   try {
@@ -1069,8 +1072,12 @@ function repayInfo() {
   const { monthly } = calcLoan(loan.principal, loan.tenure);
   const reps = getReps(loanId);
   const nd   = getNextDue(loan);
-  document.getElementById('mr_amount').value        = monthly.toFixed(2);
-  document.getElementById('mr_month').selectedIndex = Math.min(reps.length, 4);
+  document.getElementById('mr_amount').value = monthly.toFixed(2);
+  const monthSel = document.getElementById('mr_month');
+  monthSel.innerHTML = Array.from({length: loan.tenure}, (_, i) =>
+    `<option value="Month ${i + 1}">Month ${i + 1}</option>`
+  ).join('');
+  monthSel.selectedIndex = Math.min(reps.length, loan.tenure - 1);
   document.getElementById('repayInfoBox').style.display = 'block';
   document.getElementById('repayInfoBox').innerHTML =
     `<strong>Monthly Due:</strong> ${fmt(monthly)} &nbsp;|&nbsp; <strong>Payments Made:</strong> ${reps.length}/${loan.tenure} &nbsp;|&nbsp; <strong>Next Due:</strong> ${nd ? fmtD(nd) : 'N/A'}`;
@@ -1268,6 +1275,8 @@ function generatePnL() {
     const loan = cache.loans.find(l => l.id === r.loanId);
     return loan ? s + loan.principal * 0.10 : s;
   }, 0);
+  // Estimated total interest = 10% × principal × tenure for loans in range
+  const totalEstInterest = loansInRange.reduce((s,l) => s + (l.principal * 0.10 * l.tenure), 0);
   const totalCollected = repsInRange.reduce((s,r) => s + r.amount, 0);
   const totalDisbursed = loansInRange.reduce((s,l) => s + l.principal, 0);
   const principalRecovered = repsInRange.reduce((s,r) => {
@@ -1292,7 +1301,8 @@ function generatePnL() {
     }, 0);
     months.push({
       label: cursor.toLocaleDateString('en-GH', {month:'long', year:'numeric'}),
-      mFees, mInt, mIncome: mFees + mInt,
+      mFees, mInt, mEstInt: mLoans.reduce((s,l) => s + (l.principal * 0.10 * l.tenure), 0),
+      mIncome: mFees + mInt,
       mCollected: mReps.reduce((s,r) => s + r.amount, 0),
       mDisbursed: mLoans.reduce((s,l) => s + l.principal, 0),
       loanCount: mLoans.length
@@ -1309,6 +1319,7 @@ function generatePnL() {
       <td>${m.loanCount}</td>
       <td class="text-green fw-600">${fmt(m.mFees)}</td>
       <td class="text-green fw-600">${fmt(m.mInt)}</td>
+      <td style="color:var(--gold-dark);font-weight:600">${fmt(m.mEstInt)}</td>
       <td class="text-green fw-600">${fmt(m.mIncome)}</td>
       <td>${fmt(m.mCollected)}</td>
       <td>${fmt(m.mDisbursed)}</td>
@@ -1332,6 +1343,7 @@ function generatePnL() {
         <div class="stats-grid" style="margin-bottom:28px">
           <div class="stat-card green"><div class="stat-label">Processing Fees</div><div class="stat-value" style="font-size:20px">${fmt(totalFees)}</div><div class="stat-sub">${loansInRange.length} loans disbursed</div></div>
           <div class="stat-card green"><div class="stat-label">Interest Income</div><div class="stat-value" style="font-size:20px">${fmt(totalInterest)}</div><div class="stat-sub">${repsInRange.length} payments received</div></div>
+          <div class="stat-card" style="border-top:3px solid var(--gold)"><div class="stat-label">Est. Total Interest</div><div class="stat-value" style="font-size:20px;color:var(--gold-dark)">${fmt(totalEstInterest)}</div><div class="stat-sub">10%/mo × tenure (projected)</div></div>
           <div class="stat-card" style="border-top:3px solid var(--green-dark)"><div class="stat-label">Total Income</div><div class="stat-value" style="font-size:20px;color:var(--green-dark)">${fmt(totalIncome)}</div><div class="stat-sub">Fees + Interest</div></div>
           <div class="stat-card"><div class="stat-label">Cash Collected</div><div class="stat-value" style="font-size:20px">${fmt(totalCollected)}</div><div class="stat-sub">Total repayments</div></div>
           <div class="stat-card gold"><div class="stat-label">Principal Disbursed</div><div class="stat-value" style="font-size:20px">${fmt(totalDisbursed)}</div><div class="stat-sub">New loans issued</div></div>
@@ -1341,13 +1353,14 @@ function generatePnL() {
           <div style="font-size:15px;font-weight:600;color:var(--navy);margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid var(--border)">Monthly Breakdown</div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Month</th><th>Loans</th><th>Fees (4%)</th><th>Interest (10%)</th><th>Total Income</th><th>Cash Collected</th><th>Disbursed</th></tr></thead>
+              <thead><tr><th>Month</th><th>Loans</th><th>Fees (4%)</th><th>Interest (10%)</th><th>Est. Total Interest</th><th>Total Income</th><th>Cash Collected</th><th>Disbursed</th></tr></thead>
               <tbody>
                 ${monthRows}
                 <tr style="background:var(--green-light);font-weight:700">
                   <td>TOTAL</td><td>${loansInRange.length}</td>
                   <td style="color:var(--green-dark)">${fmt(totalFees)}</td>
                   <td style="color:var(--green-dark)">${fmt(totalInterest)}</td>
+                  <td style="color:var(--gold-dark)">${fmt(totalEstInterest)}</td>
                   <td style="color:var(--green-dark)">${fmt(totalIncome)}</td>
                   <td>${fmt(totalCollected)}</td>
                   <td>${fmt(totalDisbursed)}</td>
@@ -1361,7 +1374,8 @@ function generatePnL() {
           <div style="max-width:480px">
             <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px;color:var(--text-muted)"><span>INCOME</span></div>
             <div style="display:flex;justify-content:space-between;padding:10px 16px;border-bottom:1px dashed var(--border);font-size:14px"><span>Processing Fees (4% of principal)</span><span class="fw-600 text-green">${fmt(totalFees)}</span></div>
-            <div style="display:flex;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);font-size:14px"><span>Interest Income (10%/month)</span><span class="fw-600 text-green">${fmt(totalInterest)}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:10px 16px;border-bottom:1px dashed var(--border);font-size:14px"><span>Interest Income (10%/month, received)</span><span class="fw-600 text-green">${fmt(totalInterest)}</span></div>
+            <div style="display:flex;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border);font-size:14px;background:var(--gold-light)"><span style="color:var(--gold-dark);font-weight:600">Estimated Total Interest (projected, all tenures)</span><span style="color:var(--gold-dark);font-weight:600">${fmt(totalEstInterest)}</span></div>
             <div style="display:flex;justify-content:space-between;padding:12px 0;border-bottom:2px solid var(--navy);font-size:15px;font-weight:700"><span>TOTAL INCOME</span><span style="color:var(--green-dark)">${fmt(totalIncome)}</span></div>
             <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);font-size:13px;color:var(--text-muted);margin-top:4px"><span>CASH FLOWS (Reference)</span></div>
             <div style="display:flex;justify-content:space-between;padding:10px 16px;border-bottom:1px dashed var(--border);font-size:14px"><span>Principal Disbursed</span><span class="fw-600 text-danger">${fmt(totalDisbursed)}</span></div>
@@ -1373,7 +1387,7 @@ function generatePnL() {
           </div>
         </div>
         <div style="font-size:11px;color:var(--text-muted);padding-top:14px;border-top:1px solid var(--border);margin-top:8px">
-          Net Profit = Processing Fees + Interest Income. Principal disbursed and recovered are cash flow references only.
+          Net Profit = Processing Fees + Interest Income (received). Est. Total Interest = 10%/month × principal × tenure for all loans in range (full-lifecycle projection). Principal disbursed and recovered are cash flow references only.
         </div>
       </div>
     </div>
