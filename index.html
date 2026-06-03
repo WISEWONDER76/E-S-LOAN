@@ -188,14 +188,66 @@
   .text-green{color:var(--green-dark);}
   .text-danger{color:var(--danger);}
 
+  /* ===== MOBILE BOTTOM NAV ===== */
+  #mobileNav{
+    display:none;position:fixed;bottom:0;left:0;right:0;z-index:150;
+    background:var(--white);border-top:1px solid var(--border);
+    box-shadow:0 -4px 16px rgba(0,0,0,.08);
+    padding-bottom:env(safe-area-inset-bottom,0);
+  }
+  #mobileNav .mnav-items{
+    display:flex;align-items:stretch;justify-content:space-around;
+  }
+  #mobileNav .mnav-item{
+    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:3px;padding:8px 2px 6px;font-size:10px;font-weight:500;color:var(--text-muted);
+    cursor:pointer;border:none;background:none;font-family:var(--font-body);
+    transition:color .15s;min-width:0;
+  }
+  #mobileNav .mnav-item svg{width:20px;height:20px;flex-shrink:0;}
+  #mobileNav .mnav-item.active{color:var(--green-dark);}
+  #mobileNav .mnav-item span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52px;}
+
+  #mobileDrawer{
+    display:none;position:fixed;inset:0;z-index:160;
+  }
+  #mobileDrawer.open{display:block;}
+  #mobileDrawerOverlay{
+    position:absolute;inset:0;background:rgba(15,39,72,.45);
+  }
+  #mobileDrawerPanel{
+    position:absolute;bottom:0;left:0;right:0;
+    background:var(--white);border-radius:20px 20px 0 0;
+    padding:16px 0 calc(16px + env(safe-area-inset-bottom,0));
+    box-shadow:0 -8px 40px rgba(0,0,0,.18);
+  }
+  #mobileDrawerPanel .drawer-handle{
+    width:40px;height:4px;background:var(--border);border-radius:2px;
+    margin:0 auto 16px;
+  }
+  #mobileDrawerPanel .drawer-item{
+    display:flex;align-items:center;gap:14px;padding:14px 24px;
+    font-size:15px;font-weight:500;color:var(--text);cursor:pointer;
+    border:none;background:none;width:100%;font-family:var(--font-body);
+    text-align:left;transition:background .15s;
+  }
+  #mobileDrawerPanel .drawer-item:hover,
+  #mobileDrawerPanel .drawer-item.active{background:var(--green-light);color:var(--green-dark);}
+  #mobileDrawerPanel .drawer-item svg{width:20px;height:20px;flex-shrink:0;}
+  #mobileDrawerPanel .drawer-title{
+    font-size:11px;font-weight:600;color:var(--text-muted);letter-spacing:1px;
+    text-transform:uppercase;padding:4px 24px 8px;
+  }
+
   @media(max-width:768px){
     .sidebar{display:none;}
-    .main-content{padding:20px 16px;}
-    .client-wrap{padding:20px 16px;}
+    .main-content{padding:20px 16px 90px;}
+    .client-wrap{padding:20px 16px 90px;}
     .form-row{grid-template-columns:1fr;}
     .stats-grid{grid-template-columns:1fr 1fr;}
     .client-welcome{flex-direction:column;align-items:flex-start;}
     .login-card{padding:32px 22px;}
+    #mobileNav{display:block;}
   }
   @media print{
     body *{visibility:hidden;}
@@ -466,10 +518,9 @@
 </div>
 
 <!-- Firebase + App Logic -->
-<script type="module">
-
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
-import { getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
 
 // ================================================================
 //  FIREBASE INIT
@@ -482,8 +533,8 @@ const firebaseConfig = {
   messagingSenderId: "1037258521543",
   appId: "1:1037258521543:web:a23d6ab7670c53fee4b7e2"
 };
-const fireApp = initializeApp(firebaseConfig);
-const fdb = getFirestore(fireApp);
+const fireApp = firebase.initializeApp(firebaseConfig);
+const fdb = fireApp.firestore();
 
 // ================================================================
 //  CACHE & SESSION
@@ -541,14 +592,14 @@ function showToast(msg, type='success') {
 async function loadAllData() {
   showLoading('Loading data...');
   try {
-    const adminDoc = await getDoc(doc(fdb, 'settings', 'admin'));
-    if (adminDoc.exists()) cache.admin = adminDoc.data();
-    else await setDoc(doc(fdb, 'settings', 'admin'), cache.admin);
+    const adminDoc = await fdb.collection('settings').doc('admin').get();
+    if (adminDoc.exists) cache.admin = adminDoc.data();
+    else await fdb.collection('settings').doc('admin').set(cache.admin);
 
     const [cs, ls, rs] = await Promise.all([
-      getDocs(collection(fdb, 'clients')),
-      getDocs(collection(fdb, 'loans')),
-      getDocs(collection(fdb, 'repayments'))
+      fdb.collection('clients').get(),
+      fdb.collection('loans').get(),
+      fdb.collection('repayments').get()
     ]);
     cache.clients    = cs.docs.map(d => ({ id:d.id, ...d.data() }));
     cache.loans      = ls.docs.map(d => ({ id:d.id, ...d.data() }));
@@ -563,10 +614,10 @@ async function loadAllData() {
 
 async function fsSet(col, id, data) {
   const clean = JSON.parse(JSON.stringify(data));
-  await setDoc(doc(fdb, col, id), clean);
+  await fdb.collection(col).doc(id).set(clean);
 }
 async function fsDel(col, id) {
-  await deleteDoc(doc(fdb, col, id));
+  await fdb.collection(col).doc(id).delete();
 }
 
 // ================================================================
@@ -1684,6 +1735,118 @@ function filterTbl(input, id) {
 }
 window.filterTbl = filterTbl;
 
+// ================================================================
+//  MOBILE NAV
+// ================================================================
+const MNAV_PAGES = ['dashboard','clients','loans','repayments'];
+const DRAWER_PAGES = ['statements','pnl','settings'];
+
+function mNavGo(page) {
+  // Update bottom bar active states
+  MNAV_PAGES.forEach(p => {
+    const el = document.getElementById('mnav-' + p);
+    if (el) el.classList.toggle('active', p === page);
+  });
+  // If it's a drawer page, mark "more" active and update drawer items
+  const isDrawer = DRAWER_PAGES.includes(page);
+  const moreBtn = document.getElementById('mnav-more');
+  if (moreBtn) moreBtn.classList.toggle('active', isDrawer);
+  DRAWER_PAGES.forEach(p => {
+    const el = document.getElementById('drawer-' + p);
+    if (el) el.classList.toggle('active', p === page);
+  });
+  goTo(page);
+}
+window.mNavGo = mNavGo;
+
+function openMobileDrawer() {
+  document.getElementById('mobileDrawer').classList.add('open');
+}
+window.openMobileDrawer = openMobileDrawer;
+
+function closeMobileDrawer() {
+  document.getElementById('mobileDrawer').classList.remove('open');
+}
+window.closeMobileDrawer = closeMobileDrawer;
+
+// Keep mobile nav in sync when sidebar nav is used on desktop
+const _origGoTo = window.goTo;
+window.goTo = function(page) {
+  _origGoTo(page);
+  // Sync mobile nav highlights
+  if (typeof window.mNavGo === 'function') {
+    MNAV_PAGES.forEach(p => {
+      const el = document.getElementById('mnav-' + p);
+      if (el) el.classList.toggle('active', p === page);
+    });
+    const isDrawer = DRAWER_PAGES.includes(page);
+    const moreBtn = document.getElementById('mnav-more');
+    if (moreBtn) moreBtn.classList.toggle('active', isDrawer);
+  }
+};
+
+// Show/hide mobile nav only when admin is logged in
+const _origDoLogin = window.doLogin;
+window.doLogin = async function(role) {
+  await _origDoLogin(role);
+  const nav = document.getElementById('mobileNav');
+  if (nav) nav.style.display = (role === 'admin') ? 'block' : 'none';
+};
+
+const _origDoLogout = window.doLogout;
+window.doLogout = function() {
+  _origDoLogout();
+  const nav = document.getElementById('mobileNav');
+  if (nav) nav.style.display = 'none';
+};
+
 </script>
+<!-- ===== MOBILE BOTTOM NAV ===== -->
+<div id="mobileNav">
+  <div class="mnav-items">
+    <button class="mnav-item active" id="mnav-dashboard" onclick="mNavGo('dashboard')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      <span>Dashboard</span>
+    </button>
+    <button class="mnav-item" id="mnav-clients" onclick="mNavGo('clients')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span>Clients</span>
+    </button>
+    <button class="mnav-item" id="mnav-loans" onclick="mNavGo('loans')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+      <span>Loans</span>
+    </button>
+    <button class="mnav-item" id="mnav-repayments" onclick="mNavGo('repayments')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <span>Payments</span>
+    </button>
+    <button class="mnav-item" id="mnav-more" onclick="openMobileDrawer()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
+      <span>More</span>
+    </button>
+  </div>
+</div>
+
+<!-- ===== MOBILE DRAWER ===== -->
+<div id="mobileDrawer">
+  <div id="mobileDrawerOverlay" onclick="closeMobileDrawer()"></div>
+  <div id="mobileDrawerPanel">
+    <div class="drawer-handle"></div>
+    <div class="drawer-title">More</div>
+    <button class="drawer-item" id="drawer-statements" onclick="mNavGo('statements');closeMobileDrawer()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Statements
+    </button>
+    <button class="drawer-item" id="drawer-pnl" onclick="mNavGo('pnl');closeMobileDrawer()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><polyline points="2 20 22 20"/></svg>
+      Profit &amp; Loss
+    </button>
+    <button class="drawer-item" id="drawer-settings" onclick="mNavGo('settings');closeMobileDrawer()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+  </div>
+</div>
+
 </body>
 </html>
