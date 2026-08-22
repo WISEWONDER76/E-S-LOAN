@@ -349,6 +349,9 @@
       <div class="nav-item" id="nav-repayments" onclick="goTo('repayments')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>Repayments
       </div>
+      <div class="nav-item" id="nav-penalties" onclick="goTo('penalties')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>Penalties
+      </div>
       <div class="nav-item" id="nav-statements" onclick="goTo('statements')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>Statements
       </div>
@@ -477,7 +480,62 @@
   </div>
 </div>
 
+<!-- Apply / Restructure Penalty Modal -->
+<div class="modal-bg" id="mPenaltyConfirm">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header"><h3 id="mPenaltyTitle">Apply Penalty</h3><button class="modal-close" onclick="closeModal('mPenaltyConfirm')">&times;</button></div>
+    <div class="modal-body">
+      <div id="penaltyCalcBox" style="background:var(--off-white);border-radius:var(--radius-sm);padding:16px;margin-bottom:18px;"></div>
+      <div class="fg">
+        <label>Repayment Extension</label>
+        <select id="pc_extend" onchange="penaltyExtendPreview()">
+          <option value="no">NO — remaining amount stays due as-is</option>
+          <option value="yes">YES — extend the repayment period</option>
+        </select>
+      </div>
+      <div class="fg" id="pc_newPeriodRow" style="display:none">
+        <label>New Total Repayment Period (months)</label>
+        <input type="number" id="pc_newPeriod" min="1" placeholder="e.g. 3" oninput="penaltyExtendPreview()" />
+      </div>
+      <div id="pc_schedulePreview" style="font-size:13px;color:var(--text-muted);background:var(--gold-light);border-radius:var(--radius-sm);padding:10px 14px;margin-bottom:16px"></div>
+      <div class="fg"><label>Reason / Notes (optional)</label><input id="pc_reason" placeholder="e.g. Manually applied after client contact" /></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('mPenaltyConfirm')">Cancel</button>
+      <button class="btn btn-green" id="pc_confirmBtn" onclick="confirmApplyPenalty()">Confirm Penalty</button>
+    </div>
+  </div>
+</div>
 
+<!-- Waive Penalty Modal -->
+<div class="modal-bg" id="mWaive">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header"><h3>Waive Penalty</h3><button class="modal-close" onclick="closeModal('mWaive')">&times;</button></div>
+    <div class="modal-body">
+      <div id="waiveSummary" style="background:var(--off-white);border-radius:var(--radius-sm);padding:12px 14px;font-size:13px;margin-bottom:16px"></div>
+      <div class="fg"><label>Reason for Adjustment *</label><input id="waiveReason" placeholder="Required — appears in the audit trail" /></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" onclick="closeModal('mWaive')">Cancel</button>
+      <button class="btn btn-navy" onclick="confirmWaive()">Waive Penalty</button>
+    </div>
+  </div>
+</div>
+
+<!-- Penalty Notice Modal -->
+<div class="modal-bg" id="mNotice">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-header"><h3>Penalty Notice</h3><button class="modal-close" onclick="closeModal('mNotice')">&times;</button></div>
+    <div class="modal-body" id="noticeHTML" style="max-height:66vh;overflow-y:auto;"></div>
+    <div class="modal-footer" style="flex-wrap:wrap">
+      <button class="btn btn-outline" onclick="closeModal('mNotice')">Close</button>
+      <button class="btn btn-outline" onclick="generateNotice(true)">Regenerate</button>
+      <button class="btn btn-navy" onclick="printNotice()">🖨 Print</button>
+      <button class="btn btn-green" onclick="downloadNotice()">⬇ Download PDF</button>
+      <button class="btn btn-green" onclick="generateNotice(false)">Generate PDF</button>
+    </div>
+  </div>
+</div>
 
 <!-- Emergency Reset Modal -->
 <div class="modal-bg" id="mEmergency">
@@ -520,6 +578,8 @@
 <!-- Firebase + App Logic -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<!-- jsPDF: used by the Loan Default Penalty Module to generate real, downloadable penalty-notice PDFs -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script>
 
 // ================================================================
@@ -539,7 +599,16 @@ const fdb = fireApp.firestore();
 // ================================================================
 //  CACHE & SESSION
 // ================================================================
-let cache = { admin: {username:'admin', password:'admin123'}, clients:[], loans:[], repayments:[] };
+let cache = {
+  admin: {
+    username:'admin', password:'admin123',
+    // --- Loan Default Penalty Module settings (Admin > Settings > Penalty Settings) ---
+    penaltyEnabled:true, penaltyPercent:10, gracePeriodDays:4
+  },
+  clients:[], loans:[], repayments:[],
+  // --- Loan Default Penalty Module data ---
+  penalties:[], penaltyNotices:[]
+};
 let session = null;
 let editClientId = null;
 
@@ -593,17 +662,26 @@ async function loadAllData() {
   showLoading('Loading data...');
   try {
     const adminDoc = await fdb.collection('settings').doc('admin').get();
-    if (adminDoc.exists) cache.admin = adminDoc.data();
-    else await fdb.collection('settings').doc('admin').set(cache.admin);
+    if (adminDoc.exists) {
+      // Merge saved settings over defaults so older docs (saved before the
+      // penalty module existed) still pick up sane penalty defaults.
+      cache.admin = Object.assign({}, cache.admin, adminDoc.data());
+    } else {
+      await fdb.collection('settings').doc('admin').set(cache.admin);
+    }
 
-    const [cs, ls, rs] = await Promise.all([
+    const [cs, ls, rs, ps, ns] = await Promise.all([
       fdb.collection('clients').get(),
       fdb.collection('loans').get(),
-      fdb.collection('repayments').get()
+      fdb.collection('repayments').get(),
+      fdb.collection('penalties').get(),
+      fdb.collection('penaltyNotices').get()
     ]);
-    cache.clients    = cs.docs.map(d => ({ id:d.id, ...d.data() }));
-    cache.loans      = ls.docs.map(d => ({ id:d.id, ...d.data() }));
-    cache.repayments = rs.docs.map(d => ({ id:d.id, ...d.data() }));
+    cache.clients        = cs.docs.map(d => ({ id:d.id, ...d.data() }));
+    cache.loans          = ls.docs.map(d => ({ id:d.id, ...d.data() }));
+    cache.repayments     = rs.docs.map(d => ({ id:d.id, ...d.data() }));
+    cache.penalties      = ps.docs.map(d => ({ id:d.id, ...d.data() }));
+    cache.penaltyNotices = ns.docs.map(d => ({ id:d.id, ...d.data() }));
   } catch(e) {
     hideLoading();
     alert('Failed to connect to database. Check your internet connection.\n\n' + e.message);
@@ -660,6 +738,7 @@ async function doLogin(role) {
   if (role === 'admin') {
     document.getElementById('adminBody').style.display = 'flex';
     document.getElementById('clientBody').style.display = 'none';
+    await processPenalties();
     goTo('dashboard');
   } else {
     document.getElementById('adminBody').style.display = 'none';
@@ -700,7 +779,7 @@ function goTo(page) {
   const c = document.getElementById('mainContent');
   ({ dashboard:renderDashboard, clients:renderClients, loans:renderLoans,
      repayments:renderRepayments, statements:renderStatements,
-     pnl:renderPnL, settings:renderSettings })[page](c);
+     pnl:renderPnL, penalties:renderPenalties, settings:renderSettings })[page](c);
 }
 window.goTo = goTo;
 
@@ -711,7 +790,8 @@ function renderDashboard(c) {
   const disbursed      = cache.loans.reduce((s,l) => s + l.principal, 0);
   const collected      = cache.repayments.reduce((s,r) => s + r.amount, 0);
   const fees           = cache.loans.reduce((s,l) => s + l.principal * 0.04, 0);
-  const outstanding    = cache.loans.reduce((s,l) => s + getBalance(l).balance, 0);
+  const outstanding    = cache.loans.reduce((s,l) => s + getBalanceEx(l).balance, 0); // includes active penalties
+  const penaltiesOwed  = cache.loans.reduce((s,l) => s + getBalanceEx(l).penaltyTotal, 0);
   const active         = cache.loans.filter(l => l.status === 'active').length;
   // Total estimated interest = 10% × principal × tenure for every loan
   const totalEstInterest = cache.loans.reduce((s,l) => s + (l.principal * 0.10 * l.tenure), 0);
@@ -737,7 +817,7 @@ function renderDashboard(c) {
     <div class="stats-grid">
       <div class="stat-card green"><div class="stat-label">Total Disbursed</div><div class="stat-value">${fmt(disbursed)}</div><div class="stat-sub">${cache.loans.length} loans total</div></div>
       <div class="stat-card gold"><div class="stat-label">Total Collected</div><div class="stat-value">${fmt(collected)}</div><div class="stat-sub">${cache.repayments.length} payments</div></div>
-      <div class="stat-card danger"><div class="stat-label">Outstanding</div><div class="stat-value">${fmt(outstanding)}</div><div class="stat-sub">${active} active loans</div></div>
+      <div class="stat-card danger"><div class="stat-label">Outstanding</div><div class="stat-value">${fmt(outstanding)}</div><div class="stat-sub">${active} active loans${penaltiesOwed > 0 ? ' · incl. ' + fmt(penaltiesOwed) + ' in penalties' : ''}</div></div>
       <div class="stat-card navy"><div class="stat-label">Fees Earned</div><div class="stat-value">${fmt(fees)}</div><div class="stat-sub">4% processing fees</div></div>
       <div class="stat-card" style="border-top:3px solid var(--green-mid)"><div class="stat-label">Est. Total Interest</div><div class="stat-value" style="color:var(--green-dark)">${fmt(totalEstInterest)}</div><div class="stat-sub">10%/mo × tenure, all loans</div></div>
       <div class="stat-card"><div class="stat-label">Total Clients</div><div class="stat-value">${cache.clients.length}</div><div class="stat-sub">${cache.clients.filter(c => c.status === 'active').length} active</div></div>
@@ -881,16 +961,22 @@ window.deleteClient = deleteClient;
 function renderLoans(c) {
   const rows = cache.loans.map(l => {
     const cl = cache.clients.find(c => c.id === l.clientId);
-    const { total, paid, balance } = getBalance(l);
+    const { total, paid } = getBalance(l);
+    const { balance, penaltyTotal } = getBalanceEx(l);
     const pct = Math.min(100, Math.round(paid / total * 100));
     const nd  = getNextDue(l);
+    const pst = getPenaltyStatus(l);
+    const pBadgeClass = { grace:'badge-gold', overdue:'badge-red', penalty_applied:'badge-red' }[pst.code];
+    const pBadge = (l.restructure && l.restructure.active)
+      ? `<span class="badge badge-navy" style="margin-left:4px">Restructured</span>`
+      : (pBadgeClass ? `<span class="badge ${pBadgeClass}" style="margin-left:4px">${pst.label}</span>` : '');
     return `<tr>
       <td><strong>${l.id}</strong></td>
       <td>${cl?.name || '—'}</td>
       <td>${fmt(l.principal)}</td>
       <td>${l.tenure} mo</td>
       <td>${fmt(paid)}</td>
-      <td class="${balance > 0 ? 'text-danger' : 'text-green'} fw-600">${fmt(balance)}</td>
+      <td class="${balance > 0 ? 'text-danger' : 'text-green'} fw-600">${fmt(balance)}${penaltyTotal > 0 ? `<div style="font-size:11px;color:var(--danger);font-weight:400">incl. ${fmt(penaltyTotal)} penalty</div>` : ''}</td>
       <td>${nd ? fmtD(nd) : '—'}</td>
       <td>
         <div style="display:flex;align-items:center;gap:6px">
@@ -898,7 +984,7 @@ function renderLoans(c) {
           <span style="font-size:12px">${pct}%</span>
         </div>
       </td>
-      <td><span class="badge ${l.status === 'active' ? 'badge-gold' : 'badge-green'}">${l.status}</span></td>
+      <td><span class="badge ${l.status === 'active' ? 'badge-gold' : 'badge-green'}">${l.status}</span>${pBadge}</td>
       <td>
         <button class="btn btn-outline btn-sm" onclick="viewLoanDetail('${l.id}')">View</button>
         <button class="btn-del" style="margin-left:4px" onclick="deleteLoan('${l.id}')">Del</button>
@@ -998,11 +1084,28 @@ window.deleteLoan = deleteLoan;
 function viewLoanDetail(id) {
   const loan = cache.loans.find(l => l.id === id);
   const cl   = cache.clients.find(c => c.id === loan.clientId);
-  const { total, paid, balance, fee, monthly } = getBalance(loan);
+  const { total, paid, fee, monthly } = getBalance(loan);
+  const { balance, penaltyTotal } = getBalanceEx(loan);
   const reps = getReps(id);
   const pct  = Math.min(100, Math.round(paid / total * 100));
   const nd   = getNextDue(loan);
   const done = loan.status === 'completed' || mLeft(loan) === 0;
+  const pst  = getPenaltyStatus(loan);
+  const restructured = loan.restructure && loan.restructure.active;
+  const penaltySectionHTML = (penaltyTotal > 0 || ['grace','overdue','penalty_applied'].includes(pst.code) || restructured) ? `
+      <div style="margin-bottom:18px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden">
+        <div style="background:${penaltyTotal > 0 ? 'var(--danger-light)' : 'var(--gold-light)'};padding:12px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <strong style="font-size:13px;color:${penaltyTotal > 0 ? 'var(--danger)' : 'var(--gold-dark)'}">Loan Default Penalty — ${restructured ? 'Restructured' : pst.label}</strong>
+          <div>
+            ${(pst.code === 'overdue' || pst.code === 'penalty_applied') ? `<button class="btn btn-outline btn-sm" onclick="closeModal('mStatement');openPenaltyModal('${loan.id}')">${pst.code === 'penalty_applied' ? 'Restructure' : 'Apply Penalty'}</button>` : ''}
+            ${restructured ? `<button class="btn btn-navy btn-sm" style="margin-left:6px" onclick="closeModal('mStatement');openNoticeModal('${loan.id}')">Notice</button>` : ''}
+          </div>
+        </div>
+        <div style="padding:14px 16px;font-size:13px">
+          <div>Due: <strong>${fmtD(pst.dueDate)}</strong> &nbsp;|&nbsp; Grace ends: <strong>${fmtD(pst.graceEnd)}</strong> &nbsp;|&nbsp; Penalty charged: <strong style="color:var(--danger)">${fmt(penaltyTotal)}</strong></div>
+          ${restructured ? `<div style="margin-top:8px;color:var(--text-muted)">Revised plan (${loan.restructure.extendRepayment ? loan.restructure.revisedSchedule.length + ' installments' : 'single lump payment'}): ${loan.restructure.revisedSchedule.map(r => `${fmtD(r.dueDate)} — ${fmt(r.amount)}`).join(' · ')}</div>` : ''}
+        </div>
+      </div>` : '';
 
   const schedRows = Array.from({length: loan.tenure}, (_, i) => {
     const m   = i + 1;
@@ -1034,8 +1137,9 @@ function viewLoanDetail(id) {
         <div><span style="color:var(--text-muted)">Principal</span><br><strong>${fmt(loan.principal)}</strong></div>
         <div><span style="color:var(--text-muted)">Processing Fee (4%)</span><br><strong>${fmt(fee)}</strong></div>
         <div><span style="color:var(--text-muted)">Monthly Payment</span><br><strong>${fmt(monthly)}</strong></div>
-        <div><span style="color:var(--text-muted)">Total to Repay</span><br><strong>${fmt(total)}</strong></div>
+        <div><span style="color:var(--text-muted)">Total to Repay</span><br><strong>${fmt(total)}${penaltyTotal > 0 ? ' + ' + fmt(penaltyTotal) + ' penalty' : ''}</strong></div>
       </div>
+      ${penaltySectionHTML}
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px">
         <div class="stat-card gold" style="padding:14px"><div class="stat-label">Paid</div><div class="stat-value" style="font-size:18px">${fmt(paid)}</div></div>
         <div class="stat-card ${balance > 0 ? 'danger' : 'green'}" style="padding:14px"><div class="stat-label">Balance</div><div class="stat-value" style="font-size:18px;color:${balance > 0 ? 'var(--danger)' : 'var(--green-dark)'}">${fmt(balance)}</div></div>
@@ -1123,14 +1227,30 @@ function repayInfo() {
   const { monthly } = calcLoan(loan.principal, loan.tenure);
   const reps = getReps(loanId);
   const nd   = getNextDue(loan);
+  const monthSel = document.getElementById('repayInfoBox');
+  const sel  = document.getElementById('mr_month');
+
+  if (loan.restructure && loan.restructure.active) {
+    // Restructured loan: record payments against the revised schedule's labels/amounts,
+    // not the original "Month N" ones (which the penalty/restructuring event replaced).
+    const sched = loan.restructure.revisedSchedule || [];
+    const paidSince = getReps(loanId).filter(r => new Date(r.date) >= new Date(loan.restructure.restructuredAt)).length;
+    sel.innerHTML = sched.map((row, i) => `<option value="${row.label}">${row.label} — ${fmtD(row.dueDate)} (${fmt(row.amount)})</option>`).join('');
+    sel.selectedIndex = Math.min(paidSince, sched.length - 1);
+    const currentAmt = sched[Math.min(paidSince, sched.length - 1)]?.amount || 0;
+    document.getElementById('mr_amount').value = currentAmt.toFixed(2);
+    monthSel.style.display = 'block';
+    monthSel.innerHTML = `<strong>Restructured Plan:</strong> ${fmt(currentAmt)} due &nbsp;|&nbsp; <strong>Paid so far:</strong> ${paidSince}/${sched.length} &nbsp;|&nbsp; <strong>Outstanding Principal:</strong> ${fmt(getOutstandingPrincipal(loan))}`;
+    return;
+  }
+
   document.getElementById('mr_amount').value = monthly.toFixed(2);
-  const monthSel = document.getElementById('mr_month');
-  monthSel.innerHTML = Array.from({length: loan.tenure}, (_, i) =>
+  sel.innerHTML = Array.from({length: loan.tenure}, (_, i) =>
     `<option value="Month ${i + 1}">Month ${i + 1}</option>`
   ).join('');
-  monthSel.selectedIndex = Math.min(reps.length, loan.tenure - 1);
-  document.getElementById('repayInfoBox').style.display = 'block';
-  document.getElementById('repayInfoBox').innerHTML =
+  sel.selectedIndex = Math.min(reps.length, loan.tenure - 1);
+  monthSel.style.display = 'block';
+  monthSel.innerHTML =
     `<strong>Monthly Due:</strong> ${fmt(monthly)} &nbsp;|&nbsp; <strong>Payments Made:</strong> ${reps.length}/${loan.tenure} &nbsp;|&nbsp; <strong>Next Due:</strong> ${nd ? fmtD(nd) : 'N/A'}`;
 }
 window.repayInfo = repayInfo;
@@ -1152,7 +1272,12 @@ async function saveRepayment() {
     cache.repayments.push(newRep);
 
     const loan = cache.loans.find(l => l.id === lid);
-    if (loan && mLeft(loan) <= 0) {
+    // Balance-based completion check (instead of a raw payment-count vs. original tenure
+    // comparison) so restructured loans — whose schedule no longer matches the original
+    // tenure — still get marked completed correctly once everything owed (incl. penalties)
+    // is paid off. For loans that were never restructured this produces the same result
+    // as before.
+    if (loan && getBalanceEx(loan).balance <= 0) {
       loan.status = 'completed';
       await fsSet('loans', loan.id, loan);
     }
@@ -1489,9 +1614,57 @@ function renderSettings(c) {
           <div class="err-msg" id="passErr"></div>
         </div>
       </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-section-header">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--navy)" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <h3>Penalty Settings</h3>
+      </div>
+      <div class="settings-section-body">
+        <div style="max-width:460px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px">
+            <input type="checkbox" id="ps_enabled" ${cache.admin.penaltyEnabled !== false ? 'checked' : ''} style="width:18px;height:18px" />
+            <label for="ps_enabled" style="font-size:14px;color:var(--text);font-weight:500">Enable automatic default penalties</label>
+          </div>
+          <div class="form-row">
+            <div class="fg"><label>Penalty Percentage (%)</label><input type="number" id="ps_rate" min="0" max="100" step="0.5" value="${cache.admin.penaltyPercent ?? 10}" /></div>
+            <div class="fg"><label>Grace Period (days)</label><input type="number" id="ps_grace" min="0" max="90" value="${cache.admin.gracePeriodDays ?? 4}" /></div>
+          </div>
+          <div style="background:var(--navy-light);border-radius:var(--radius-sm);padding:12px 16px;font-size:12px;color:var(--text-muted);margin-bottom:16px">
+            Penalty basis: <strong style="color:var(--navy)">Outstanding Principal</strong> (not the total scheduled repayment). When a client misses an installment's due date, they get the grace period above before a penalty of the percentage above is added to their balance.
+          </div>
+          <button class="btn btn-navy" onclick="savePenaltySettings()">Save Penalty Settings</button>
+          <div class="succ-msg" id="penaltySettSucc">✓ Penalty settings saved!</div>
+          <div class="err-msg" id="penaltySettErr"></div>
+        </div>
+      </div>
     </div>`;
 }
 window.renderSettings = renderSettings;
+
+async function savePenaltySettings() {
+  const enabled = document.getElementById('ps_enabled').checked;
+  const rate    = parseFloat(document.getElementById('ps_rate').value);
+  const grace   = parseInt(document.getElementById('ps_grace').value);
+  const eEl = document.getElementById('penaltySettErr'), sEl = document.getElementById('penaltySettSucc');
+  eEl.style.display = 'none'; sEl.style.display = 'none';
+  if (isNaN(rate) || rate < 0 || rate > 100)   { eEl.textContent = 'Penalty percentage must be between 0 and 100.'; eEl.style.display = 'block'; return; }
+  if (isNaN(grace) || grace < 0 || grace > 90) { eEl.textContent = 'Grace period must be between 0 and 90 days.'; eEl.style.display = 'block'; return; }
+  showLoading('Saving penalty settings...');
+  try {
+    cache.admin.penaltyEnabled  = enabled;
+    cache.admin.penaltyPercent  = rate;
+    cache.admin.gracePeriodDays = grace;
+    await fsSet('settings', 'admin', cache.admin);
+    await auditLog('penalty_settings_changed', { penaltyEnabled: enabled, penaltyPercent: rate, gracePeriodDays: grace });
+    sEl.style.display = 'block'; setTimeout(() => sEl.style.display = 'none', 4000);
+    await processPenalties();
+  } catch (e) {
+    eEl.textContent = 'Failed to save settings. Check connection.'; eEl.style.display = 'block';
+  }
+  hideLoading();
+}
+window.savePenaltySettings = savePenaltySettings;
 
 async function changeUsername() {
   const cur  = document.getElementById('s_curUser').value.trim();
@@ -1587,12 +1760,20 @@ function renderClient() {
   }
 
   const cards = loans.map(loan => {
-    const { total, paid, balance, fee, monthly } = getBalance(loan);
+    const { total, paid, fee, monthly } = getBalance(loan);
+    const { balance, penaltyTotal } = getBalanceEx(loan);
     const nd   = getNextDue(loan);
     const ml   = mLeft(loan);
     const pct  = Math.min(100, Math.round(paid / total * 100));
     const reps = getReps(loan.id);
-    const done = loan.status === 'completed' || ml === 0;
+    const done = loan.status === 'completed' || balance <= 0;
+    const restructured = loan.restructure && loan.restructure.active;
+    const penaltyBanner = penaltyTotal > 0 ? `
+      <div style="background:var(--danger-light);border-left:3px solid var(--danger);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:18px;font-size:13px;color:var(--danger)">
+        <strong>A default penalty of ${fmt(penaltyTotal)} has been applied to this loan${restructured ? ' and your payment plan has been revised' : ''}.</strong>
+        ${restructured ? `<div style="margin-top:6px;color:var(--text)">${loan.restructure.revisedSchedule.map(r => `${fmtD(r.dueDate)}: ${fmt(r.amount)}`).join(' &nbsp;|&nbsp; ')}</div>` : ''}
+        <div style="margin-top:4px">Please contact us on 020-2154489 if you have questions about this notice.</div>
+      </div>` : '';
 
     const schedRows = Array.from({length: loan.tenure}, (_, i) => {
       const m   = i + 1;
@@ -1616,9 +1797,10 @@ function renderClient() {
           <span class="badge ${done ? 'badge-green' : 'badge-gold'}">${done ? 'Completed' : 'Active'}</span>
         </div>
         <div class="card-body">
+          ${penaltyBanner}
           <div class="stats-grid" style="margin-bottom:20px">
             <div class="stat-card green"><div class="stat-label">Principal</div><div class="stat-value" style="font-size:18px">${fmt(loan.principal)}</div><div class="stat-sub">10% / month interest</div></div>
-            <div class="stat-card gold"><div class="stat-label">Amount Paid</div><div class="stat-value" style="font-size:18px">${fmt(paid)}</div><div class="stat-sub">of ${fmt(total)} total</div></div>
+            <div class="stat-card gold"><div class="stat-label">Amount Paid</div><div class="stat-value" style="font-size:18px">${fmt(paid)}</div><div class="stat-sub">of ${fmt(total)}${penaltyTotal > 0 ? ' + ' + fmt(penaltyTotal) + ' penalty' : ''} total</div></div>
             <div class="stat-card ${balance > 0 ? 'danger' : 'green'}"><div class="stat-label">Balance Left</div><div class="stat-value" style="font-size:18px;color:${balance > 0 ? 'var(--danger)' : 'var(--green-dark)'}">${fmt(balance)}</div><div class="stat-sub">${done ? 'Fully settled' : ml + ' months remaining'}</div></div>
             <div class="stat-card navy"><div class="stat-label">Next Due Date</div><div class="stat-value" style="font-size:14px;margin-top:4px">${nd ? fmtD(nd) : '—'}</div><div class="stat-sub">${done ? 'No more payments' : (nd ? 'Monthly: ' + fmt(monthly) : '')}</div></div>
           </div>
@@ -1735,11 +1917,748 @@ function filterTbl(input, id) {
 }
 window.filterTbl = filterTbl;
 
+
+// ================================================================
+//  LOAN DEFAULT PENALTY & AUTOMATIC NOTICE MODULE
+//  ----------------------------------------------------------------
+//  Added on top of the existing Firestore-backed client app. There is
+//  no separate application server here — like the rest of this app,
+//  all business logic below runs in the browser and talks straight to
+//  Firestore. That means penalty calculations are NOT independently
+//  verified by a backend; the mitigation used here is a single set of
+//  calculation functions (penaltyCfg / getOutstandingPrincipal /
+//  getPenaltyStatus / applyPenalty / restructureLoan) that every
+//  screen — dashboard badges, the Penalty Management page, the
+//  confirmation modal and the generated PDF notice — calls into, so
+//  the numbers shown to the admin and the numbers actually written to
+//  Firestore can never disagree. If you later add a real backend,
+//  this is the code to port there for server-side verification.
+// ================================================================
+
+// ---- Admin-configurable settings (stored on settings/admin, alongside username/password) ----
+function penaltyCfg() {
+  return {
+    enabled:   cache.admin.penaltyEnabled !== false,
+    rate:      Number(cache.admin.penaltyPercent ?? 10),
+    graceDays: Number(cache.admin.gracePeriodDays ?? 4)
+  };
+}
+
+// ---- Schedule / due-date helpers ----
+// Mirrors the exact convention already used by getNextDue(): start date + N months, pinned to repDay.
+function installmentDueDate(loan, monthIndex1based) {
+  const d = new Date(loan.startDate);
+  d.setMonth(d.getMonth() + monthIndex1based);
+  d.setDate(loan.repDay || 1);
+  return d;
+}
+function addGraceDays(dueDate, graceDays) {
+  const d = new Date(dueDate);
+  d.setDate(d.getDate() + graceDays);
+  return d;
+}
+function isoDate(d) { return new Date(d).toISOString().slice(0, 10); }
+function ordinalSuffix(n) { const s = ['th','st','nd','rd'], v = n % 100; return s[(v - 20) % 10] || s[v] || s[0]; }
+
+// "Outstanding principal" (as distinct from the total scheduled repayment, which also
+// bakes in interest). Each installment repays principal/tenure of principal plus flat
+// monthly interest, so outstanding principal shrinks evenly with each payment made —
+// regardless of which "month" label that payment happened to be recorded against.
+function getOutstandingPrincipal(loan) {
+  const paidCount = Math.min(getReps(loan.id).length, loan.tenure);
+  const principalPerInstallment = loan.principal / loan.tenure;
+  const remaining = loan.principal - principalPerInstallment * paidCount;
+  return Math.max(0, Math.round(remaining * 100) / 100);
+}
+
+// Ledger-style total: never overwrites calcLoan()/getBalance() — it adds active penalty
+// amounts on top, the same way a real loan ledger would show separate transaction lines.
+function activePenaltiesForLoan(loanId) {
+  return cache.penalties.filter(p => p.loanId === loanId && p.status === 'active');
+}
+function getPenaltyTotal(loanId) {
+  return activePenaltiesForLoan(loanId).reduce((s, p) => s + p.penaltyAmount, 0);
+}
+function getBalanceEx(loan) {
+  const base = getBalance(loan);
+  const penaltyTotal = getPenaltyTotal(loan.id);
+  const total = Math.round((base.total + penaltyTotal) * 100) / 100;
+  const balance = Math.max(0, Math.round((total - base.paid) * 100) / 100);
+  return Object.assign({}, base, { penaltyTotal, total, balance });
+}
+
+// The installment currently "at risk" of (or already subject to) a penalty — the oldest
+// unpaid one under whichever schedule currently governs the loan (original, or the
+// revised schedule created after a restructuring decision).
+function currentDueInstallment(loan) {
+  if (loan.status === 'completed') return null;
+  if (loan.restructure && loan.restructure.active) {
+    const sched = loan.restructure.revisedSchedule || [];
+    const paidSince = getReps(loan.id).filter(r => new Date(r.date) >= new Date(loan.restructure.restructuredAt)).length;
+    if (paidSince >= sched.length) return null;
+    const row = sched[paidSince];
+    return { label: row.label, dueDate: new Date(row.dueDate + 'T00:00:00'), amount: row.amount };
+  }
+  const paidCount = getReps(loan.id).length;
+  if (paidCount >= loan.tenure) return null;
+  const monthIdx = paidCount + 1;
+  return { label: `Month ${monthIdx}`, dueDate: installmentDueDate(loan, monthIdx) };
+}
+
+// Single source of truth for "where does this loan stand right now" — used by the
+// Loans table badge, the Penalty Management list, the loan detail page, the client
+// portal, and the automatic processor below.
+function getPenaltyStatus(loan) {
+  if (loan.status === 'completed') return { code: 'paid', label: 'Fully Paid' };
+  const inst = currentDueInstallment(loan);
+  if (!inst) return { code: 'paid', label: 'Fully Paid' };
+
+  const cfg = penaltyCfg();
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const due = new Date(inst.dueDate); due.setHours(0, 0, 0, 0);
+  const graceEnd = addGraceDays(due, cfg.graceDays); graceEnd.setHours(0, 0, 0, 0);
+
+  const activePen = activePenaltiesForLoan(loan.id).find(p => p.installmentLabel === inst.label);
+  if (activePen) {
+    return { code: 'penalty_applied', label: 'Penalty Applied', dueDate: due, graceEnd, installment: inst, penalty: activePen };
+  }
+  if (today <= due) {
+    const daysToDue = Math.round((due - today) / 86400000);
+    const label = daysToDue === 0 ? 'Due Today' : (daysToDue <= 3 ? 'Due Soon' : 'Active');
+    return { code: 'active', label, dueDate: due, graceEnd, installment: inst };
+  }
+  if (today <= graceEnd) {
+    return { code: 'grace', label: 'Grace Period', dueDate: due, graceEnd, installment: inst };
+  }
+  return { code: 'overdue', label: cfg.enabled ? 'Overdue' : 'Overdue (penalties disabled)', dueDate: due, graceEnd, installment: inst };
+}
+
+// ---- Audit trail (lightweight, data-layer only in this pass — see delivery notes for
+// the planned Audit Log viewer page). Every financial change below calls this. ----
+async function auditLog(action, data) {
+  try {
+    const id = 'AUD-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+    await fsSet('auditLog', id, {
+      id, action, data,
+      user: (session && session.user && session.user.name) || 'system',
+      role: (session && session.role) || 'system',
+      at: new Date().toISOString()
+    });
+  } catch (e) { /* audit logging must never block the underlying action */ }
+}
+
+// ---- Apply a penalty to one installment (idempotent caller-side: see processPenalties) ----
+async function applyPenalty(loan, installment, opts) {
+  opts = opts || {};
+  const cfg = penaltyCfg();
+  const outstandingPrincipal = getOutstandingPrincipal(loan);
+  const penaltyAmount = Math.round(outstandingPrincipal * (cfg.rate / 100) * 100) / 100;
+  const before = getBalanceEx(loan);
+  const id = 'PEN-' + String(Date.now()).slice(-8) + Math.floor(Math.random() * 90 + 10);
+  const rec = {
+    id, loanId: loan.id, clientId: loan.clientId,
+    installmentLabel: installment.label,
+    dueDate: isoDate(installment.dueDate),
+    graceEndDate: isoDate(addGraceDays(installment.dueDate, cfg.graceDays)),
+    outstandingPrincipal, penaltyRate: cfg.rate, penaltyAmount,
+    previousBalance: before.total,
+    newBalance: Math.round((before.total + penaltyAmount) * 100) / 100,
+    status: 'active',
+    appliedAt: new Date().toISOString(),
+    appliedBy: opts.appliedBy || (session && session.user && session.user.name) || 'system',
+    reason: opts.reason || (opts.auto ? 'Automatic penalty — grace period expired' : 'Manually applied by administrator'),
+    extendRepayment: null
+  };
+  await fsSet('penalties', id, rec);
+  cache.penalties.push(rec);
+  await auditLog('penalty_created', { loanId: loan.id, penaltyId: id, installment: installment.label, amount: penaltyAmount, auto: !!opts.auto });
+  return rec;
+}
+
+// ---- Idempotent automatic processor: safe to call every login / every dashboard load ----
+async function processPenalties() {
+  const cfg = penaltyCfg();
+  if (!cfg.enabled) return;
+  for (const loan of cache.loans) {
+    if (loan.status === 'completed') continue;
+    const st = getPenaltyStatus(loan);
+    if (st.code !== 'overdue') continue;
+    const alreadyExists = cache.penalties.some(p => p.loanId === loan.id && p.installmentLabel === st.installment.label);
+    if (alreadyExists) continue; // never charge the same default event twice
+    try {
+      const penalty = await applyPenalty(loan, st.installment, { auto: true, appliedBy: 'system (automatic)' });
+      // Sensible, conservative default until an admin reviews it: don't silently change
+      // the loan's term — just fold the penalty into what's due at the very next payment.
+      await restructureLoan(loan, penalty, false, null);
+    } catch (e) { /* one bad loan should not block processing the rest */ }
+  }
+}
+
+// ---- Restructuring: builds (or replaces) the revised schedule after a penalty decision ----
+// extend=false  -> single lump installment for the full new balance, due one cycle after
+//                  the defaulted due date (matches "no extension" example in the spec).
+// extend=true   -> spreads the new balance across (newTenureMonths - currentInstallmentNo)
+//                  installments, one per month from the defaulted due date, with the final
+//                  installment absorbing any rounding remainder so the schedule totals exactly.
+async function restructureLoan(loan, penalty, extend, newTenureMonthsInput) {
+  const bal = getBalanceEx(loan); // already includes this penalty (it was saved before this call)
+  const remainingDue = bal.balance;
+  const paidCount = getReps(loan.id).length;
+  const currentInstNum = paidCount + 1;
+  const baseDue = new Date(penalty.dueDate + 'T00:00:00');
+  let schedule = [];
+  let newTenureMonths = null;
+
+  if (extend) {
+    newTenureMonths = Math.max(1, parseInt(newTenureMonthsInput) || 0);
+    const n = newTenureMonths - currentInstNum;
+    if (n < 1) throw new Error(`New repayment period must be at least ${currentInstNum + 1} month(s) so there is at least one installment remaining.`);
+    let running = 0;
+    for (let i = 0; i < n; i++) {
+      let amt = Math.round((remainingDue / n) * 100) / 100;
+      if (i === n - 1) amt = Math.round((remainingDue - running) * 100) / 100; // final row balances the schedule exactly
+      running = Math.round((running + amt) * 100) / 100;
+      const due = new Date(baseDue); due.setMonth(due.getMonth() + i + 1);
+      schedule.push({ label: `R${i + 1}`, dueDate: isoDate(due), amount: amt, status: 'pending' });
+    }
+  } else {
+    const due = new Date(baseDue); due.setMonth(due.getMonth() + 1);
+    schedule.push({ label: 'R1', dueDate: isoDate(due), amount: remainingDue, status: 'pending' });
+  }
+
+  loan.restructure = {
+    active: true,
+    penaltyId: penalty.id,
+    extendRepayment: !!extend,
+    newTenureMonths: newTenureMonths || currentInstNum + 1,
+    revisedSchedule: schedule,
+    restructuredAt: new Date().toISOString()
+  };
+  await fsSet('loans', loan.id, loan);
+
+  penalty.extendRepayment = !!extend;
+  await fsSet('penalties', penalty.id, penalty);
+
+  await auditLog('repayment_schedule_changed', { loanId: loan.id, penaltyId: penalty.id, extend: !!extend, newTenureMonths, schedule });
+}
+
+// ---- Waive / reverse a penalty ----
+async function waivePenalty(penaltyId, reason) {
+  const p = cache.penalties.find(x => x.id === penaltyId);
+  if (!p) return;
+  p.status = 'waived';
+  p.waivedAt = new Date().toISOString();
+  p.waivedBy = (session && session.user && session.user.name) || 'admin';
+  p.waiveReason = reason || '';
+  await fsSet('penalties', penaltyId, p);
+  await auditLog('penalty_waived', { penaltyId, loanId: p.loanId, reason });
+}
+
+// ================================================================
+//  PENALTY MANAGEMENT PAGE
+// ================================================================
+let _penaltyFilter = { q: '', status: '' };
+
+function renderPenalties(c) {
+  const rows = cache.loans.map(loan => ({ loan, st: getPenaltyStatus(loan) }));
+  const relevant = rows.filter(({ loan, st }) =>
+    ['grace', 'overdue', 'penalty_applied'].includes(st.code) || (loan.restructure && loan.restructure.active)
+  );
+
+  const inGrace         = rows.filter(({ st }) => st.code === 'grace').length;
+  const totalOverdue     = rows.filter(({ st }) => st.code === 'overdue' || st.code === 'penalty_applied').length;
+  const penaltiesActive   = cache.penalties.filter(p => p.status === 'active');
+  const totalPenaltiesChg = penaltiesActive.reduce((s, p) => s + p.penaltyAmount, 0);
+  const totalOverdueAmt   = relevant.reduce((s, { loan }) => s + getBalanceEx(loan).balance, 0);
+  const pendingDecision   = rows.filter(({ loan, st }) => st.code === 'penalty_applied' && !(loan.restructure && loan.restructure.active)).length;
+
+  const cfg = penaltyCfg();
+  const cards = `
+    <div class="stats-grid">
+      <div class="stat-card danger"><div class="stat-label">Total Overdue Loans</div><div class="stat-value">${totalOverdue}</div></div>
+      <div class="stat-card gold"><div class="stat-label">Loans in Grace Period</div><div class="stat-value">${inGrace}</div></div>
+      <div class="stat-card"><div class="stat-label">Penalties Pending Decision</div><div class="stat-value">${pendingDecision}</div></div>
+      <div class="stat-card navy"><div class="stat-label">Penalties Applied</div><div class="stat-value">${penaltiesActive.length}</div></div>
+      <div class="stat-card green"><div class="stat-label">Total Penalties Charged</div><div class="stat-value" style="font-size:19px">${fmt(totalPenaltiesChg)}</div></div>
+      <div class="stat-card danger"><div class="stat-label">Total Overdue Amount</div><div class="stat-value" style="font-size:19px">${fmt(totalOverdueAmt)}</div></div>
+    </div>`;
+
+  const filtered = relevant.filter(({ loan, st }) => {
+    const cl = cache.clients.find(c => c.id === loan.clientId);
+    const q = _penaltyFilter.q.toLowerCase();
+    const matchesQ = !q || loan.id.toLowerCase().includes(q) || (cl && (cl.name.toLowerCase().includes(q) || cl.id.toLowerCase().includes(q)));
+    const matchesStatus = !_penaltyFilter.status || st.code === _penaltyFilter.status;
+    return matchesQ && matchesStatus;
+  });
+
+  const rowsHtml = filtered.map(({ loan, st }) => {
+    const cl = cache.clients.find(c => c.id === loan.clientId);
+    const bal = getBalanceEx(loan);
+    const restructured = loan.restructure && loan.restructure.active;
+    const badgeClass = { grace: 'badge-gold', overdue: 'badge-red', penalty_applied: 'badge-navy', active: 'badge-navy' }[st.code] || 'badge-navy';
+    const badgeLabel = restructured ? 'Restructured' : st.label;
+    const notice = cache.penaltyNotices.filter(n => n.loanId === loan.id).sort((a, b) => b.version - a.version)[0];
+    const penaltyForLoan = st.penalty || (restructured && cache.penalties.find(p => p.id === loan.restructure.penaltyId));
+
+    // The Restructure / Apply Penalty button stays available for every loan in this list,
+    // for as long as it's relevant (grace, overdue, penalty applied, or already restructured)
+    // — including after the admin has already restructured it once, so they can always come
+    // back and re-adjust the extend decision or the number of months. It never disappears.
+    const actions = [];
+    const canRestructureAgain = restructured || !!penaltyForLoan;
+    actions.push(`<button class="btn btn-outline btn-sm" onclick="openPenaltyModal('${loan.id}')">${canRestructureAgain ? 'Restructure' : 'Apply Penalty'}</button>`);
+    if (penaltyForLoan) actions.push(`<button class="btn-del" style="margin-left:4px" onclick="openWaiveModal('${penaltyForLoan.id}')">Waive</button>`);
+    if (restructured) actions.push(`<button class="btn btn-navy btn-sm" style="margin-left:4px" onclick="openNoticeModal('${loan.id}')">${notice ? 'View / Regenerate Notice' : 'Generate Notice'}</button>`);
+
+    return `<tr>
+      <td><strong>${loan.id}</strong></td>
+      <td>${cl ? cl.name : '—'}</td>
+      <td>${fmtD(st.dueDate)}</td>
+      <td>${fmtD(st.graceEnd)}</td>
+      <td><span class="badge ${badgeClass}">${badgeLabel}</span></td>
+      <td>${fmt(getOutstandingPrincipal(loan))}</td>
+      <td>${fmt(bal.penaltyTotal)}</td>
+      <td class="fw-600 text-danger">${fmt(bal.balance)}</td>
+      <td style="font-size:12px">${notice ? notice.noticeNumber : '—'}</td>
+      <td>${actions.join('') || '—'}</td>
+    </tr>`;
+  }).join('');
+
+  c.innerHTML = `
+    <div class="page-title">Penalty Management</div>
+    <div class="page-sub">Default penalties, grace periods and recovery notices — rate ${cfg.rate}%, grace ${cfg.graceDays} day(s)${cfg.enabled ? '' : ' &nbsp;<span class="badge badge-red">Penalties Disabled</span>'}</div>
+    ${cards}
+    <div class="toolbar">
+      <input class="search-input" placeholder="Search by client, loan, client ID..." value="${_penaltyFilter.q}" oninput="_penaltyFilter.q=this.value;renderPenalties(document.getElementById('mainContent'))" />
+      <select class="search-input" style="min-width:190px" onchange="_penaltyFilter.status=this.value;renderPenalties(document.getElementById('mainContent'))">
+        <option value="">All statuses</option>
+        <option value="grace" ${_penaltyFilter.status === 'grace' ? 'selected' : ''}>Grace Period</option>
+        <option value="overdue" ${_penaltyFilter.status === 'overdue' ? 'selected' : ''}>Overdue</option>
+        <option value="penalty_applied" ${_penaltyFilter.status === 'penalty_applied' ? 'selected' : ''}>Penalty Applied</option>
+      </select>
+    </div>
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Loan</th><th>Client</th><th>Due Date</th><th>Grace Ends</th><th>Status</th><th>Outstanding Principal</th><th>Penalty</th><th>New Amount Due</th><th>Notice</th><th>Actions</th></tr></thead>
+          <tbody>${rowsHtml || '<tr><td colspan="10" style="text-align:center;padding:32px;color:var(--text-muted)">No overdue, grace-period, or penalized loans right now.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+window.renderPenalties = renderPenalties;
+
+// ================================================================
+//  APPLY / RESTRUCTURE PENALTY MODAL
+// ================================================================
+let _penaltyModalCtx = null;
+
+function openPenaltyModal(loanId) {
+  const loan = cache.loans.find(l => l.id === loanId);
+  if (!loan) return;
+  const cl = cache.clients.find(c => c.id === loan.clientId);
+  const cfg = penaltyCfg();
+  const st = getPenaltyStatus(loan);
+  const installment = st.installment;
+  if (!installment) { showToast('This loan has no outstanding installment to penalize.', 'error'); return; }
+
+  // Reopening "Restructure" on a loan that was already restructured must find the ORIGINAL
+  // penalty event via loan.restructure.penaltyId — st.penalty alone only matches when the
+  // *current* due installment carries an active penalty, which is no longer true once that
+  // installment has been folded into a revised schedule (its label changes to R1, R2, ...).
+  // Without this fallback, the Restructure button would silently start a brand-new penalty
+  // instead of letting the admin re-adjust the one already on this loan.
+  const existingPenalty = st.penalty
+    || (loan.restructure && loan.restructure.active && cache.penalties.find(p => p.id === loan.restructure.penaltyId))
+    || null;
+  const isReRestructure = !!(loan.restructure && loan.restructure.active && existingPenalty && !st.penalty);
+
+  const outstandingPrincipal = existingPenalty ? existingPenalty.outstandingPrincipal : getOutstandingPrincipal(loan);
+  const rate = existingPenalty ? existingPenalty.penaltyRate : cfg.rate;
+  const penaltyAmount = existingPenalty ? existingPenalty.penaltyAmount : Math.round(outstandingPrincipal * (rate / 100) * 100) / 100;
+  // Use the LIVE outstanding balance (not the frozen snapshot from when the penalty was first
+  // applied) so re-restructuring after a partial payment shows accurate, up-to-date numbers.
+  const liveBalance = getBalanceEx(loan).balance;
+  const previousBalance = existingPenalty ? (isReRestructure ? liveBalance : existingPenalty.previousBalance) : getBalanceEx(loan).total;
+  const newBalance = existingPenalty ? (isReRestructure ? liveBalance : existingPenalty.newBalance) : Math.round((previousBalance + penaltyAmount) * 100) / 100;
+  const dueDate = existingPenalty ? new Date(existingPenalty.dueDate + 'T00:00:00') : installment.dueDate;
+  const graceEnd = existingPenalty ? new Date(existingPenalty.graceEndDate + 'T00:00:00') : addGraceDays(installment.dueDate, cfg.graceDays);
+
+  _penaltyModalCtx = {
+    loanId, penaltyId: existingPenalty ? existingPenalty.id : null,
+    installmentLabel: installment.label, previewPenaltyAmount: penaltyAmount, previewNewBalance: newBalance
+  };
+
+  document.getElementById('mPenaltyTitle').textContent = existingPenalty ? 'Restructure Penalty' : 'Apply Penalty';
+  document.getElementById('penaltyCalcBox').innerHTML = `
+    <div style="font-weight:600;color:var(--navy);font-size:13px;margin-bottom:10px">${isReRestructure ? 'Re-adjust Restructuring' : 'Apply Penalty'}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:13px">
+      <div><span style="color:var(--text-muted)">Client</span><br><strong>${cl ? cl.name : '—'}</strong></div>
+      <div><span style="color:var(--text-muted)">Loan</span><br><strong>${loan.id}</strong></div>
+      <div><span style="color:var(--text-muted)">Due Date</span><br><strong>${fmtD(dueDate)}</strong></div>
+      <div><span style="color:var(--text-muted)">Grace Period</span><br><strong>${cfg.graceDays} days</strong></div>
+      <div><span style="color:var(--text-muted)">Grace Period Ends</span><br><strong>${fmtD(graceEnd)}</strong></div>
+      <div><span style="color:var(--text-muted)">Outstanding Principal</span><br><strong>${fmt(outstandingPrincipal)}</strong></div>
+      <div><span style="color:var(--text-muted)">Penalty Rate</span><br><strong>${rate}%</strong></div>
+      <div><span style="color:var(--text-muted)">Penalty</span><br><strong style="color:var(--danger)">${fmt(penaltyAmount)}</strong></div>
+      ${isReRestructure
+        ? `<div style="grid-column:1/-1"><span style="color:var(--text-muted)">Amount Left to Restructure (current balance)</span><br><strong style="color:var(--green-dark)">${fmt(newBalance)}</strong></div>`
+        : `<div><span style="color:var(--text-muted)">Current Amount Due</span><br><strong>${fmt(previousBalance)}</strong></div>
+      <div><span style="color:var(--text-muted)">New Amount Due</span><br><strong style="color:var(--green-dark)">${fmt(newBalance)}</strong></div>`}
+    </div>`;
+
+  // Pre-fill with the current restructuring choice (if any) so re-adjusting starts from
+  // what's already set, rather than silently resetting it back to "no extension" each time.
+  const currentExtend = isReRestructure && loan.restructure.extendRepayment;
+  document.getElementById('pc_extend').value = currentExtend ? 'yes' : 'no';
+  document.getElementById('pc_newPeriod').value = currentExtend ? loan.restructure.newTenureMonths : '';
+  document.getElementById('pc_reason').value = '';
+  penaltyExtendPreview();
+  openModal('mPenaltyConfirm');
+}
+window.openPenaltyModal = openPenaltyModal;
+
+function penaltyExtendPreview() {
+  if (!_penaltyModalCtx) return;
+  const loan = cache.loans.find(l => l.id === _penaltyModalCtx.loanId);
+  const extend = document.getElementById('pc_extend').value === 'yes';
+  document.getElementById('pc_newPeriodRow').style.display = extend ? '' : 'none';
+  const previewEl = document.getElementById('pc_schedulePreview');
+  const bal = _penaltyModalCtx.previewNewBalance;
+  const paidCount = getReps(loan.id).length;
+  const currentInstNum = paidCount + 1;
+  if (!extend) {
+    previewEl.innerHTML = `Remaining balance stays due according to the existing arrangement: <strong>1 installment of ${fmt(bal)}</strong>, due one month after the missed due date.`;
+    return;
+  }
+  const newPeriod = parseInt(document.getElementById('pc_newPeriod').value) || 0;
+  const n = newPeriod - currentInstNum;
+  if (!newPeriod) { previewEl.innerHTML = `Enter a new repayment period (must be at least ${currentInstNum + 1} months).`; return; }
+  if (n < 1) { previewEl.innerHTML = `<span style="color:var(--danger)">New repayment period must be at least ${currentInstNum + 1} months.</span>`; return; }
+  const per = Math.round((bal / n) * 100) / 100;
+  previewEl.innerHTML = `${n} installment(s) of approximately <strong>${fmt(per)}</strong> each, starting the month after the missed due date.`;
+}
+window.penaltyExtendPreview = penaltyExtendPreview;
+
+async function confirmApplyPenalty() {
+  if (!_penaltyModalCtx) return;
+  const { loanId, penaltyId, installmentLabel } = _penaltyModalCtx;
+  const loan = cache.loans.find(l => l.id === loanId);
+  const extend = document.getElementById('pc_extend').value === 'yes';
+  const newPeriod = parseInt(document.getElementById('pc_newPeriod').value) || null;
+  const reason = document.getElementById('pc_reason').value.trim();
+
+  showLoading(penaltyId ? 'Updating repayment plan...' : 'Applying penalty...');
+  try {
+    let penalty;
+    if (penaltyId) {
+      penalty = cache.penalties.find(p => p.id === penaltyId);
+    } else {
+      const installment = currentDueInstallment(loan);
+      if (!installment || installment.label !== installmentLabel) {
+        throw new Error('This loan\'s status just changed — please close and reopen this dialog.');
+      }
+      penalty = await applyPenalty(loan, installment, { appliedBy: (session && session.user && session.user.name) || 'admin', reason: reason || undefined, auto: false });
+    }
+    await restructureLoan(loan, penalty, extend, newPeriod);
+    showToast('Penalty ' + (penaltyId ? 'restructuring updated.' : 'applied and repayment plan updated.'));
+    closeModal('mPenaltyConfirm');
+    goTo('penalties');
+  } catch (e) {
+    showToast(e.message || 'Failed to apply penalty.', 'error');
+  }
+  hideLoading();
+}
+window.confirmApplyPenalty = confirmApplyPenalty;
+
+// ================================================================
+//  WAIVE PENALTY MODAL
+// ================================================================
+let _waiveCtx = null;
+
+function openWaiveModal(penaltyId) {
+  const p = cache.penalties.find(x => x.id === penaltyId);
+  if (!p) return;
+  const loan = cache.loans.find(l => l.id === p.loanId);
+  const cl = loan && cache.clients.find(c => c.id === loan.clientId);
+  _waiveCtx = penaltyId;
+  document.getElementById('waiveSummary').innerHTML =
+    `<strong>${cl ? cl.name : '—'}</strong> — Loan ${p.loanId} — Penalty <strong style="color:var(--danger)">${fmt(p.penaltyAmount)}</strong> (${p.installmentLabel})`;
+  document.getElementById('waiveReason').value = '';
+  openModal('mWaive');
+}
+window.openWaiveModal = openWaiveModal;
+
+async function confirmWaive() {
+  if (!_waiveCtx) return;
+  const reason = document.getElementById('waiveReason').value.trim();
+  if (!reason) { showToast('A reason is required to waive a penalty.', 'error'); return; }
+  showLoading('Waiving penalty...');
+  try {
+    await waivePenalty(_waiveCtx, reason);
+    showToast('Penalty waived.');
+    closeModal('mWaive');
+    goTo('penalties');
+  } catch (e) {
+    showToast('Failed to waive penalty.', 'error');
+  }
+  hideLoading();
+}
+window.confirmWaive = confirmWaive;
+
+// ================================================================
+//  PENALTY NOTICE — PREVIEW + REAL PDF (jsPDF)
+// ================================================================
+let _noticeCtx = null;
+let _lastNoticeDoc = null;
+let _lastNoticeMeta = null;
+
+function buildNoticeSnapshot(loan) {
+  if (!loan.restructure || !loan.restructure.active) return null;
+  const penalty = cache.penalties.find(p => p.id === loan.restructure.penaltyId);
+  if (!penalty) return null;
+  const cl = cache.clients.find(c => c.id === loan.clientId);
+  const cfg = penaltyCfg();
+  const schedule = loan.restructure.revisedSchedule || [];
+  return {
+    clientName: cl ? cl.name : '—', clientId: cl ? cl.id : loan.clientId,
+    phone: cl ? cl.phone : '', address: cl ? (cl.address || '') : '',
+    loanId: loan.id, principal: loan.principal, tenure: loan.tenure,
+    dueDate: penalty.dueDate, gracePeriodDays: cfg.graceDays, graceEndDate: penalty.graceEndDate,
+    outstandingPrincipal: penalty.outstandingPrincipal, penaltyRate: penalty.penaltyRate, penaltyAmount: penalty.penaltyAmount,
+    previousBalance: penalty.previousBalance, newBalance: penalty.newBalance,
+    extendRepayment: loan.restructure.extendRepayment, revisedSchedule: schedule,
+    monthlyRequired: schedule.length ? schedule[0].amount : 0,
+    noticeDate: new Date().toISOString()
+  };
+}
+
+function renderNoticeHTML(snap, meta) {
+  const scheduleRows = snap.extendRepayment
+    ? snap.revisedSchedule.map((r, i) => `<tr><td style="padding:7px 0;border-bottom:1px solid var(--border)">${i + 1}${ordinalSuffix(i + 1)} Monthly Payment</td><td style="padding:7px 0;border-bottom:1px solid var(--border)">${fmtD(r.dueDate)}</td><td style="padding:7px 0;border-bottom:1px solid var(--border);text-align:right">${fmt(r.amount)}</td></tr>`).join('')
+    : `<tr><td style="padding:7px 0;border-bottom:1px solid var(--border)">Total Amount Due</td><td style="padding:7px 0;border-bottom:1px solid var(--border)">${fmtD(snap.revisedSchedule[0].dueDate)}</td><td style="padding:7px 0;border-bottom:1px solid var(--border);text-align:right">${fmt(snap.revisedSchedule[0].amount)}</td></tr>`;
+  return `
+    <div class="print-zone" style="padding:8px">
+      <div style="text-align:center;padding-bottom:18px;border-bottom:2px solid var(--navy);margin-bottom:18px">
+        <img src="${logoSrc()}" style="height:60px;width:auto;margin-bottom:6px" /><br>
+        <strong style="font-size:15px;color:var(--navy)">OVERDUE LOAN REPAYMENT NOTICE</strong>
+        <p style="font-size:11px;color:var(--text-muted);margin-top:4px">Notice No: ${meta.number}${meta.version ? ' · v' + meta.version : ''} &nbsp;|&nbsp; Date: ${fmtD(snap.noticeDate)}</p>
+      </div>
+      <div style="font-size:13px;margin-bottom:14px">
+        <strong>To:</strong> ${snap.clientName} (${snap.clientId}) &nbsp;|&nbsp; <strong>Loan:</strong> ${snap.loanId}
+      </div>
+      <p style="font-size:13px;line-height:1.7;margin-bottom:14px">
+        Dear ${snap.clientName}, your repayment on loan <strong>${snap.loanId}</strong> was due on <strong>${fmtD(snap.dueDate)}</strong>.
+        A grace period of <strong>${snap.gracePeriodDays} day(s)</strong> was granted and expired on <strong>${fmtD(snap.graceEndDate)}</strong>.
+        As payment was not received within the applicable grace period, a penalty of <strong>${snap.penaltyRate}%</strong> has been applied to the outstanding principal balance in accordance with our loan agreement.
+      </p>
+      <div style="font-size:14px;font-weight:600;color:var(--navy);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border)">Loan Account Summary</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px">
+        <tr><td style="padding:6px 0;color:var(--text-muted)">Outstanding Principal</td><td style="text-align:right;padding:6px 0">${fmt(snap.outstandingPrincipal)}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--text-muted)">Penalty (${snap.penaltyRate}% on principal)</td><td style="text-align:right;padding:6px 0">${fmt(snap.penaltyAmount)}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--text-muted)">Previous Amount Due</td><td style="text-align:right;padding:6px 0">${fmt(snap.previousBalance)}</td></tr>
+        <tr style="border-top:2px solid var(--navy);font-weight:700"><td style="padding:8px 0">New Total Amount Due</td><td style="text-align:right;padding:8px 0;color:var(--danger)">${fmt(snap.newBalance)}</td></tr>
+      </table>
+      <div style="font-size:14px;font-weight:600;color:var(--navy);margin-bottom:8px">${snap.extendRepayment ? 'Revised Repayment Schedule' : 'Revised Payment Requirement'}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:14px">
+        <thead><tr style="background:var(--off-white)"><th style="text-align:left;padding:8px 0;font-size:11px;color:var(--text-muted);text-transform:uppercase">Installment</th><th style="text-align:left;padding:8px 0;font-size:11px;color:var(--text-muted);text-transform:uppercase">Due Date</th><th style="text-align:right;padding:8px 0;font-size:11px;color:var(--text-muted);text-transform:uppercase">Amount</th></tr></thead>
+        <tbody>${scheduleRows}</tbody>
+      </table>
+      <div style="background:var(--success-light);border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:14px">
+        <strong>Monthly Payment Required:</strong> ${fmt(snap.monthlyRequired)}
+      </div>
+      <p style="font-size:12px;color:var(--danger);margin-bottom:10px">Please note: continued non-payment beyond the revised due date(s) above may result in further penalties and recovery action in accordance with our loan agreement.</p>
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:24px">If you have already made this payment, or have any questions about this notice, please contact us immediately on 020-2154489 so we can update our records.</p>
+      <div style="font-size:13px">
+        <div style="border-top:1px solid var(--border);width:180px;margin-bottom:6px">&nbsp;</div>
+        Loan Recovery Officer<br>Emmanuel &amp; Sons Loan Consultancy
+      </div>
+    </div>`;
+}
+
+function openNoticeModal(loanId) {
+  const loan = cache.loans.find(l => l.id === loanId);
+  if (!loan) return;
+  const snap = buildNoticeSnapshot(loan);
+  if (!snap) { showToast('Apply and confirm a penalty decision for this loan first.', 'error'); return; }
+  _noticeCtx = { loanId };
+  _lastNoticeDoc = null; _lastNoticeMeta = null;
+  const existing = cache.penaltyNotices.filter(n => n.loanId === loan.id && n.penaltyId === loan.restructure.penaltyId).sort((a, b) => b.version - a.version)[0];
+  document.getElementById('noticeHTML').innerHTML = renderNoticeHTML(existing ? existing.snapshot : snap, existing ? { number: existing.noticeNumber, version: existing.version } : { number: '(not yet generated)' });
+  if (existing) { _lastNoticeMeta = existing; }
+  openModal('mNotice');
+}
+window.openNoticeModal = openNoticeModal;
+
+async function generateNotice(regenerate) {
+  if (!_noticeCtx) return;
+  const loan = cache.loans.find(l => l.id === _noticeCtx.loanId);
+  const snap = buildNoticeSnapshot(loan);
+  if (!snap) { showToast('No confirmed penalty found for this loan.', 'error'); return; }
+
+  showLoading('Generating penalty notice...');
+  try {
+    const existingForPenalty = cache.penaltyNotices.filter(n => n.loanId === loan.id && n.penaltyId === loan.restructure.penaltyId);
+    let rec;
+    if (existingForPenalty.length && !regenerate) {
+      rec = existingForPenalty.sort((a, b) => b.version - a.version)[0];
+    } else {
+      const year = new Date().getFullYear();
+      const seq = cache.penaltyNotices.filter(n => n.noticeNumber && n.noticeNumber.startsWith('PN-' + year)).length + 1;
+      const noticeNumber = `PN-${year}-${String(seq).padStart(6, '0')}`;
+      rec = {
+        id: 'NOT-' + String(Date.now()).slice(-8),
+        noticeNumber, loanId: loan.id, clientId: loan.clientId, penaltyId: loan.restructure.penaltyId,
+        version: existingForPenalty.length + 1, noticeDate: snap.noticeDate, snapshot: snap,
+        generatedBy: (session && session.user && session.user.name) || 'admin', createdAt: new Date().toISOString()
+      };
+      await fsSet('penaltyNotices', rec.id, rec);
+      cache.penaltyNotices.push(rec);
+      await auditLog(regenerate ? 'notice_regenerated' : 'notice_generated', { loanId: loan.id, noticeNumber, version: rec.version });
+    }
+    _lastNoticeDoc = buildNoticePDFDoc(rec.snapshot, rec.noticeNumber, rec.version);
+    _lastNoticeMeta = rec;
+    document.getElementById('noticeHTML').innerHTML = renderNoticeHTML(rec.snapshot, { number: rec.noticeNumber, version: rec.version });
+    showToast('Penalty notice ' + rec.noticeNumber + ' ready.');
+  } catch (e) {
+    showToast('Failed to generate notice.', 'error');
+  }
+  hideLoading();
+}
+window.generateNotice = generateNotice;
+
+function downloadNotice() {
+  if (!_lastNoticeDoc) { generateNotice(false).then(() => { if (_lastNoticeDoc) _lastNoticeDoc.save(`${_lastNoticeMeta.noticeNumber}.pdf`); }); return; }
+  _lastNoticeDoc.save(`${_lastNoticeMeta.noticeNumber}.pdf`);
+}
+window.downloadNotice = downloadNotice;
+
+function printNotice() {
+  if (!_lastNoticeDoc) { generateNotice(false).then(() => { if (_lastNoticeDoc) { _lastNoticeDoc.autoPrint(); window.open(_lastNoticeDoc.output('bloburl'), '_blank'); } }); return; }
+  _lastNoticeDoc.autoPrint();
+  window.open(_lastNoticeDoc.output('bloburl'), '_blank');
+}
+window.printNotice = printNotice;
+
+// ---- Real, print-quality A4 PDF built with jsPDF (no browser "print to PDF" screenshot) ----
+function pdfSectionTitle(doc, title, x, y, pageW) {
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(15, 39, 72);
+  doc.text(title, x, y); y += 2;
+  doc.setDrawColor(15, 39, 72); doc.setLineWidth(0.3);
+  doc.line(x, y, pageW - x, y);
+  return y + 6;
+}
+function pdfKVRow(doc, k, v, x, pageW, y, bold) {
+  doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(10);
+  if (bold) doc.setTextColor(26, 92, 46); else doc.setTextColor(90, 99, 118);
+  doc.text(k, x, y);
+  doc.text(v, pageW - x, y, { align: 'right' });
+  return y + 6;
+}
+
+function buildNoticePDFDoc(snap, noticeNumber, version) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const pageW = 210, marginX = 18;
+  let y = 16;
+
+  try { doc.addImage(logoSrc(), 'JPEG', marginX, y, 22, 22); } catch (e) { /* logo optional */ }
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(14); doc.setTextColor(15, 39, 72);
+  doc.text('EMMANUEL & SONS LOAN CONSULTANCY', marginX + 28, y + 8);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90, 99, 118);
+  doc.text('020-2154489  |  Loan Recovery & Penalty Notice', marginX + 28, y + 14);
+  doc.setDrawColor(15, 39, 72); doc.setLineWidth(0.6);
+  doc.line(marginX, y + 26, pageW - marginX, y + 26);
+  y += 34;
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(90, 99, 118);
+  doc.text(`Notice No: ${noticeNumber}  (v${version})`, marginX, y);
+  doc.text(`Date: ${fmtD(snap.noticeDate)}`, pageW - marginX, y, { align: 'right' });
+  y += 8;
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(15, 39, 72);
+  doc.text('RE: OVERDUE LOAN REPAYMENT NOTICE AND REVISED PAYMENT PLAN', marginX, y);
+  y += 8;
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(26, 26, 46);
+  doc.text(`To: ${snap.clientName}  (Client ID: ${snap.clientId})`, marginX, y); y += 5;
+  if (snap.phone) { doc.text(`Phone: ${snap.phone}`, marginX, y); y += 5; }
+  doc.text(`Loan Reference: ${snap.loanId}`, marginX, y); y += 8;
+
+  doc.text(`Dear ${snap.clientName},`, marginX, y); y += 7;
+  const bodyLines = doc.splitTextToSize(
+    `This is to formally notify you that repayment on your loan ${snap.loanId} was due on ${fmtD(snap.dueDate)}. ` +
+    `A grace period of ${snap.gracePeriodDays} day(s) was granted and expired on ${fmtD(snap.graceEndDate)}. ` +
+    `As payment was not received within the applicable grace period, a penalty of ${snap.penaltyRate}% has been applied ` +
+    `to the outstanding principal balance in accordance with our loan agreement.`,
+    pageW - marginX * 2
+  );
+  doc.text(bodyLines, marginX, y); y += bodyLines.length * 5 + 4;
+
+  y = pdfSectionTitle(doc, 'Loan Account Summary', marginX, y, pageW);
+  y = pdfKVRow(doc, 'Outstanding Principal', fmt(snap.outstandingPrincipal), marginX, pageW, y);
+  y = pdfKVRow(doc, `Penalty (${snap.penaltyRate}% on principal)`, fmt(snap.penaltyAmount), marginX, pageW, y);
+  y = pdfKVRow(doc, 'Previous Amount Due', fmt(snap.previousBalance), marginX, pageW, y);
+  y = pdfKVRow(doc, 'New Total Amount Due', fmt(snap.newBalance), marginX, pageW, y, true);
+  y += 4;
+
+  y = pdfSectionTitle(doc, snap.extendRepayment ? 'Revised Repayment Schedule' : 'Revised Payment Requirement', marginX, y, pageW);
+  if (snap.extendRepayment) {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(90, 99, 118);
+    doc.text('Installment', marginX, y); doc.text('Due Date', marginX + 75, y); doc.text('Amount', pageW - marginX, y, { align: 'right' });
+    y += 2; doc.setDrawColor(221, 227, 237); doc.line(marginX, y, pageW - marginX, y); y += 6;
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.setTextColor(26, 26, 46);
+    snap.revisedSchedule.forEach((row, i) => {
+      if (y > 270) { doc.addPage(); y = 20; }
+      doc.text(`${i + 1}${ordinalSuffix(i + 1)} Monthly Payment`, marginX, y);
+      doc.text(fmtD(row.dueDate), marginX + 75, y);
+      doc.text(fmt(row.amount), pageW - marginX, y, { align: 'right' });
+      y += 6;
+    });
+    doc.setDrawColor(15, 39, 72); doc.line(marginX, y, pageW - marginX, y); y += 6;
+    doc.setFont('helvetica', 'bold');
+    doc.text('Total', marginX, y); doc.text(fmt(snap.newBalance), pageW - marginX, y, { align: 'right' });
+    y += 10;
+  } else {
+    const row = snap.revisedSchedule[0];
+    y = pdfKVRow(doc, `Total Amount Due (payable ${fmtD(row.dueDate)})`, fmt(row.amount), marginX, pageW, y, true);
+    y += 6;
+  }
+
+  y = pdfSectionTitle(doc, 'Monthly Payment Required', marginX, y, pageW);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(12); doc.setTextColor(26, 92, 46);
+  doc.text(fmt(snap.monthlyRequired), marginX, y); y += 10;
+
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(192, 57, 43);
+  const warnLines = doc.splitTextToSize('Please note: continued non-payment beyond the revised due date(s) above may result in further penalties and recovery action in accordance with our loan agreement.', pageW - marginX * 2);
+  doc.text(warnLines, marginX, y); y += warnLines.length * 5 + 6;
+
+  doc.setTextColor(90, 99, 118);
+  const clarLines = doc.splitTextToSize('If you have already made this payment, or if you have any questions about this notice, please contact us immediately on 020-2154489 so we can update our records.', pageW - marginX * 2);
+  doc.text(clarLines, marginX, y); y += clarLines.length * 5 + 16;
+
+  if (y > 260) { doc.addPage(); y = 20; }
+  doc.setDrawColor(221, 227, 237); doc.line(marginX, y, marginX + 70, y);
+  y += 5;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(26, 26, 46);
+  doc.text('Loan Recovery Officer', marginX, y); y += 5;
+  doc.text('Emmanuel & Sons Loan Consultancy', marginX, y);
+
+  const pageCount = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= pageCount; i++) {
+    doc.setPage(i);
+    doc.setFontSize(8); doc.setTextColor(150, 150, 150);
+    doc.text(`Page ${i} of ${pageCount}`, pageW / 2, 290, { align: 'center' });
+  }
+  return doc;
+}
+
+
 // ================================================================
 //  MOBILE NAV
 // ================================================================
 const MNAV_PAGES = ['dashboard','clients','loans','repayments'];
-const DRAWER_PAGES = ['statements','pnl','settings'];
+const DRAWER_PAGES = ['penalties','statements','pnl','settings'];
 
 function mNavGo(page) {
   // Update bottom bar active states
@@ -1833,6 +2752,10 @@ window.doLogout = function() {
   <div id="mobileDrawerPanel">
     <div class="drawer-handle"></div>
     <div class="drawer-title">More</div>
+    <button class="drawer-item" id="drawer-penalties" onclick="mNavGo('penalties');closeMobileDrawer()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      Penalties
+    </button>
     <button class="drawer-item" id="drawer-statements" onclick="mNavGo('statements');closeMobileDrawer()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
       Statements
